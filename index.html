@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
@@ -469,15 +469,22 @@
                 const machineStr = item.Machine?.Value || item.Machine;
                 const categoryStr = item.Category?.Value || item.Category;
                 const typeStr = item.TypeTag?.Value || item.TypeTag;
+                const reagentName = item.Title;
+                
+                // 🌟 新增：針對特定 MAS 項目強制啟用解凍邏輯
+                let forceHasThaw = item.HasThaw || false;
+                if (reagentName.includes("MAS 1") || reagentName.includes("MAS 3")) {
+                    forceHasThaw = true;
+                }
 
                 return {
-                    name: item.Title,
+                    name: reagentName,
                     validDays: item.ValidDays === -1 ? "manual" : item.ValidDays,
                     type: (typeStr && typeStr.trim() !== "") ? typeStr : "開",
                     category: categoryStr,
                     machine: machineNameToId[machineStr],
                     blankOpen: item.BlankOpen || false,
-                    hasThaw: item.HasThaw || false
+                    hasThaw: forceHasThaw
                 };
             });
             console.log("✅ 雲端載入成功共 " + reagentData.length + " 筆");
@@ -956,6 +963,37 @@
             wrapperThaw.style.display = 'block';
             showSpecialGroup = true;
             populateThawRecords(selectedReagent.name);
+            
+            // 🌟 新增：針對 MAS 的動態 UI 提示
+            const thawCheckboxLabel = wrapperThaw.querySelector('.checkbox-wrapper');
+            const chkThawInput = document.getElementById('chkThaw');
+            
+            if (selectedReagent.name.includes("MAS 1") || selectedReagent.name.includes("MAS 3")) {
+                // 替換原本的 checkbox HTML 結構，加入明顯的文字提示
+                thawCheckboxLabel.innerHTML = `
+                    <div style="background-color: #ffeaa7; padding: 8px; border-radius: 4px; width: 100%;">
+                        <div style="color: #d35400; font-weight: bold; margin-bottom: 5px;">⚠️ 請問您現在要執行哪一種作業？</div>
+                        <label style="display:flex; align-items:center; cursor:pointer; color: #333; font-weight:normal; font-size:14px; margin-bottom:4px;">
+                            <input type="radio" name="masActionType" value="thaw" checked onchange="document.getElementById('chkThaw').checked = true; updatePreview();" style="margin-right:8px; width:auto;"> 
+                            1️⃣ 剛拿出來，正在執行【解凍作業】(不開瓶)
+                        </label>
+                        <label style="display:flex; align-items:center; cursor:pointer; color: #333; font-weight:normal; font-size:14px;">
+                            <input type="radio" name="masActionType" value="open" onchange="document.getElementById('chkThaw').checked = false; updatePreview();" style="margin-right:8px; width:auto;"> 
+                            2️⃣ 已經解凍完畢，準備執行【開瓶作業】
+                        </label>
+                        <!-- 隱藏原本的 checkbox，由 radio 控制 -->
+                        <input type="checkbox" id="chkThaw" style="display:none;" onchange="updatePreview()">
+                    </div>
+                `;
+                // 預設選中解凍
+                document.getElementById('chkThaw').checked = true;
+            } else {
+                // 恢復原本其他試劑的 checkbox 樣式
+                thawCheckboxLabel.innerHTML = `
+                    <input type="checkbox" id="chkThaw" onchange="updatePreview()"> 執行【解凍作業】(不開瓶)
+                `;
+                document.getElementById('chkThaw').checked = false;
+            }
         } else {
             wrapperThaw.style.display = 'none';
         }
