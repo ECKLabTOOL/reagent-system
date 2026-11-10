@@ -140,11 +140,12 @@
             max-width: 650px; display: block; 
         }
         .history-header-wrapper { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #bdc3c7; padding-bottom: 8px; margin-bottom: 10px; flex-wrap: wrap; gap: 10px; }
-        .header-title-group { display: flex; align-items: center; gap: 12px; }
+        .header-title-group { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         #historySection h3 { color: #2c3e50; margin: 0; font-size: 18px; }
         .admin-toggle-btn { background: transparent; border: 1px solid #bdc3c7; border-radius: 4px; padding: 4px 8px; font-size: 12px; cursor: pointer; color: #7f8c8d; transition: 0.2s; font-weight: bold; }
         .admin-toggle-btn:hover { background: #ecf0f1; color: #2c3e50; }
         .admin-active { background: #e74c3c !important; color: white !important; border-color: #c0392b !important; }
+        .token-active { background: #eafaf1 !important; color: #27ae60 !important; border-color: #2ecc71 !important; }
         
         .machine-group-title { background-color: #ecf0f1; padding: 8px 12px; margin-top: 15px; margin-bottom: 0; border-left: 4px solid #3498db; color: #2c3e50; font-size: 15px; font-weight: bold; border-top-left-radius: 4px; border-top-right-radius: 4px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; transition: 0.2s; }
         .machine-group-title:hover { background-color: #dadddf; }
@@ -272,13 +273,13 @@
             <!-- 一般項目 或 低濃度 (L) 批號 -->
             <div id="lotNumberLGroup">
                 <label for="lotNumber">試劑批號 (Batch / Lot No.) <span style="color:red;">*</span>：</label>
-                <input type="text" id="lotNumber" placeholder="請輸入批號 (必填)">
+                <input type="text" id="lotNumber" placeholder="請輸入批號 (必填)" maxlength="40">
             </div>
             
             <!-- 高濃度 (H) 專屬批號 (預設隱藏，只在雙張項目顯示) -->
             <div id="lotNumberHGroup" style="display:none; margin-top: 10px; border-top: 1px dashed #ccc; padding-top: 10px;">
                 <label for="lotNumberH">高濃度 (H) 試劑批號 <span style="color:red;">*</span>：</label>
-                <input type="text" id="lotNumberH" placeholder="請輸入高濃度批號 (必填)">
+                <input type="text" id="lotNumberH" placeholder="請輸入高濃度批號 (必填)" maxlength="40">
             </div>
         </div>
 
@@ -354,6 +355,7 @@
             <div class="header-title-group">
                 <h3>📋大實驗組試劑效期狀態</h3>
                 <button class="admin-toggle-btn" id="adminToggleBtn" onclick="toggleAdmin()">🔒 管理員登入</button>
+                <button class="admin-toggle-btn" id="tokenSettingBtn" onclick="openTokenModal()" title="設定雲端 API 科室通行碼">🔑 通行碼</button>
             </div>
             <div class="header-btn-group"></div>
         </div>
@@ -361,7 +363,7 @@
     </div>
 </div> 
 
-<!-- 登入 / 編輯 Modal -->
+<!-- 登入 Modal -->
 <div class="modal-overlay" id="loginModal">
     <div class="modal-content">
         <h3>🔒 系統管理員驗證</h3>
@@ -376,6 +378,22 @@
     </div>
 </div>
 
+<!-- 科室通行碼設定 Modal -->
+<div class="modal-overlay" id="tokenModal">
+    <div class="modal-content">
+        <h3>🔑 科室雲端通行碼設定</h3>
+        <p style="font-size: 13px; color: #7f8c8d; margin-bottom: 15px;">設定後將儲存於本機瀏覽器，每次與雲端同步或出庫時會自動附帶此通行碼供後端驗證。</p>
+        <div class="form-group" style="margin-bottom: 0;">
+            <input type="password" id="labTokenInput" placeholder="請輸入科室通行碼 (未啟用可留空)" onkeypress="if(event.key === 'Enter') saveTokenSetting()">
+        </div>
+        <div class="modal-btn-group">
+            <button class="modal-btn-cancel" onclick="closeModals()">取消</button>
+            <button class="modal-btn-save" onclick="saveTokenSetting()">💾 儲存並重整</button>
+        </div>
+    </div>
+</div>
+
+<!-- 編輯 Modal -->
 <div class="modal-overlay" id="editModal">
     <div class="modal-content">
         <h3>✏️ 編輯試劑效期</h3>
@@ -383,22 +401,23 @@
         
         <div class="form-group">
             <label>開/解日 (格式範例: 24/05/01)</label>
-            <input type="text" id="editOpenDate">
+            <input type="text" id="editOpenDate" maxlength="10">
         </div>
         <div class="form-group">
             <label>到期日 (格式範例: 24/05/08)</label>
-            <input type="text" id="editExpireDate">
+            <input type="text" id="editExpireDate" maxlength="10">
         </div>
         
         <div class="modal-btn-group">
             <button class="modal-btn-cancel" onclick="closeModals()">取消</button>
-            <button class="modal-btn-save" onclick="saveEdit()">💾 儲存變更</button>
+            <button class="modal-btn-save" id="editSaveBtn" onclick="saveEdit()">💾 儲存並同步雲端</button>
         </div>
     </div>
 </div>
 
 <script>
     let reagentData = []; 
+    let clockDriftWarned = false;
 
     const machineNameToId = {
         "700/5800共用項目": 1,
@@ -424,6 +443,127 @@
         9: "HM-Jack"
     };
 
+    // ==========================================
+    // 🛡️ 資安防護輔助函式 (XSS 過濾、SHA-256 雜湊、通行碼與時間檢查)
+    // ==========================================
+    const ADMIN_PASSWORD_HASH = "defdae444b7e18190479ab79b244be809e144bc9a8d6033426919efcf51ceb06"; // 預設密碼之 SHA-256 雜湊值
+    const LAB_TOKEN_KEY = "reagentLabToken";
+    let sessionAdminHash = "";
+
+    // 1. HTML 特殊字元跳脫，防止 Stored / DOM XSS 攻擊
+    function escapeHtml(str) {
+        if (str === null || str === undefined) return "";
+        return String(str).replace(/[&<>"']/g, function(m) {
+            return {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            }[m];
+        });
+    }
+
+    // 2. 過濾輸入框危險字元
+    function sanitizeInputText(str) {
+        if (!str) return "";
+        return String(str).replace(/[<>"'&]/g, '');
+    }
+
+    // 3. 計算 SHA-256 雜湊值 (支援 HTTPS Web Crypto API 與本地備援)
+    async function computeSha256(message) {
+        if (window.crypto && window.crypto.subtle) {
+            const msgBuffer = new TextEncoder().encode(message);
+            const hashBuffer = await window.crypto.subtle.digest('SHA-256', msgBuffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        } else {
+            // 若於非 HTTPS (如本機 file://) 開啟導致無法呼叫 crypto.subtle 的純 JS SHA-256 備援實作
+            function rightRotate(value, amount) { return (value >>> amount) | (value << (32 - amount)); }
+            var mathPow = Math.pow, maxWord = mathPow(2, 32), lengthProperty = 'length', i, j, result = '';
+            var words = [], asciiBitLength = message[lengthProperty] * 8;
+            var hash = [], k = [], primeCounter = 0;
+            var isComposite = {};
+            for (var candidate = 2; primeCounter < 64; candidate++) {
+                if (!isComposite[candidate]) {
+                    for (i = 0; i < 313; i += candidate) isComposite[i] = candidate;
+                    hash[primeCounter] = (mathPow(candidate, .5) * maxWord) | 0;
+                    k[primeCounter++] = (mathPow(candidate, 1 / 3) * maxWord) | 0;
+                }
+            }
+            message += '\x80';
+            while (message[lengthProperty] % 64 - 56) message += '\x00';
+            for (i = 0; i < message[lengthProperty]; i++) {
+                j = message.charCodeAt(i);
+                if (j >> 8) return '';
+                words[i >> 2] |= j << ((3 - i) % 4) * 8;
+            }
+            words[words[lengthProperty]] = ((asciiBitLength / maxWord) | 0);
+            words[words[lengthProperty]] = (asciiBitLength);
+            for (j = 0; j < words[lengthProperty];) {
+                var w = words.slice(j, j += 16), oldHash = hash;
+                hash = hash.slice(0, 8);
+                for (i = 0; i < 64; i++) {
+                    var i2 = i + j, w15 = w[i - 15], w2 = w[i - 2];
+                    var a = hash[0], e = hash[4];
+                    var temp1 = hash[7] + (rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25)) + ((e & hash[5]) ^ ((~e) & hash[6])) + k[i] + (w[i] = (i < 16) ? w[i] : (w[i - 16] + (rightRotate(w15, 7) ^ rightRotate(w15, 18) ^ (w15 >>> 3)) + w[i - 7] + (rightRotate(w2, 17) ^ rightRotate(w2, 19) ^ (w2 >>> 10))) | 0);
+                    var temp2 = (rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22)) + ((a & hash[1]) ^ (a & hash[2]) ^ (hash[1] & hash[2]));
+                    hash = [(temp1 + temp2) | 0].concat(hash);
+                    hash[4] = (hash[4] + temp1) | 0;
+                }
+                for (i = 0; i < 8; i++) hash[i] = (hash[i] + oldHash[i]) | 0;
+            }
+            for (i = 0; i < 8; i++) {
+                for (j = 3; j + 1; j--) {
+                    var b = (hash[i] >> (j * 8)) & 255;
+                    result += ((b < 16) ? 0 : '') + b.toString(16);
+                }
+            }
+            return result;
+        }
+    }
+
+    // 4. 取得本機設定之科室通行碼，並附加於 URL (避免觸發 CORS 預檢失敗)
+    function getLabToken() {
+        return localStorage.getItem(LAB_TOKEN_KEY) || "";
+    }
+
+    function appendTokenToUrl(baseUrl) {
+        const token = getLabToken();
+        if (!token) return baseUrl;
+        const separator = baseUrl.includes('?') ? '&' : '?';
+        return `${baseUrl}${separator}labToken=${encodeURIComponent(token)}`;
+    }
+
+    function updateTokenBtnStyle() {
+        const btn = document.getElementById('tokenSettingBtn');
+        if (!btn) return;
+        if (getLabToken()) {
+            btn.classList.add('token-active');
+            btn.innerHTML = "🔑 通行碼(已設)";
+        } else {
+            btn.classList.remove('token-active');
+            btn.innerHTML = "🔑 通行碼";
+        }
+    }
+
+    // 5. 檢查伺服器標準時間與本機時鐘是否偏移超過 15 分鐘
+    function checkServerClockDrift(response) {
+        if (clockDriftWarned || !response || !response.headers) return;
+        const serverDateStr = response.headers.get('Date') || response.headers.get('date');
+        if (serverDateStr) {
+            const serverTime = new Date(serverDateStr).getTime();
+            const localTime = Date.now();
+            if (!isNaN(serverTime)) {
+                const diffMinutes = Math.abs(localTime - serverTime) / (1000 * 60);
+                if (diffMinutes > 15) {
+                    clockDriftWarned = true;
+                    alert(`⚠️ 系統時間異常警告：\n這台電腦的系統時間與雲端標準時間相差約 ${Math.round(diffMinutes)} 分鐘！\n為確保試劑到期日與出庫紀錄正確，請先校正電腦右下角的日期與時間。`);
+                }
+            }
+        }
+    }
+
     // 🌟 安全解析日期字串為時間戳記
     function parseExpireTimestamp(dateStr, fallbackValidDays) {
         if (dateStr && dateStr !== "-" && dateStr !== "無紀錄") {
@@ -448,9 +588,10 @@
 
     // 🌟 1. 帶有強力除錯功能的出庫試劑讀取
     async function loadReagentsFromCloud() {
-        const getUrl = "https://defaulta2bef7fe039e4eeebc6a1e7e6ffaaf.b3.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/09/workflows/2c55c100fe01408c8e0172524d56c7eb/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=D1YIFe76r_Fngcz7liZDVng5qkJsUReGa9WRTl8-PX0";
+        const getUrl = appendTokenToUrl("https://defaulta2bef7fe039e4eeebc6a1e7e6ffaaf.b3.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/09/workflows/2c55c100fe01408c8e0172524d56c7eb/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=D1YIFe76r_Fngcz7liZDVng5qkJsUReGa9WRTl8-PX0");
         try {
             const response = await fetch(getUrl, { method: 'GET' });
+            checkServerClockDrift(response);
             
             // 如果伺服器回應 401, 403, 500 等錯誤，抓取具體原因
             if (!response.ok) {
@@ -469,9 +610,9 @@
                 const machineStr = item.Machine?.Value || item.Machine;
                 const categoryStr = item.Category?.Value || item.Category;
                 const typeStr = item.TypeTag?.Value || item.TypeTag;
-                const reagentName = item.Title;
+                const reagentName = item.Title || "";
                 
-                // 🌟 新增：針對特定 MAS 項目強制啟用解凍邏輯
+                // 🌟 針對特定 MAS 項目強制啟用解凍邏輯
                 let forceHasThaw = item.HasThaw || false;
                 if (reagentName.includes("MAS 1") || reagentName.includes("MAS 3")) {
                     forceHasThaw = true;
@@ -491,17 +632,17 @@
             await syncDashboardFromCloud(); 
         } catch (error) {
             console.error("❌ 載入失敗:", error);
-            // 直接把錯誤原因印在畫面上，不用開 F12 也能排錯
-            alert("⚠️ 資料庫連線失敗！\n\n詳細原因：\n" + error.message + "\n\n(若是 401/403 錯誤，請檢查 Power Automate 網址授權碼；若是 Failed to fetch，請檢查醫院防火牆或網路連線)");
+            alert("⚠️ 資料庫連線失敗！\n\n詳細原因：\n" + error.message + "\n\n(若是 401/403 錯誤，請檢查科室通行碼或 Power Automate 網址授權碼；若是 Failed to fetch，請檢查醫院防火牆或網路連線)");
         }
     }
 
     // 🌟 2. 更嚴謹的戰情面板同步 (防止 logsArray 解析失敗)
     async function syncDashboardFromCloud() {
-        const getLogUrl = "https://defaulta2bef7fe039e4eeebc6a1e7e6ffaaf.b3.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/26/workflows/f26220adf84f4b48bb2f4c815ba94c25/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=LcDyVfadFRSR6o2WtzwsKrK_qTXv6oa-nxmWUAXM_Zg";
+        const getLogUrl = appendTokenToUrl("https://defaulta2bef7fe039e4eeebc6a1e7e6ffaaf.b3.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/26/workflows/f26220adf84f4b48bb2f4c815ba94c25/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=LcDyVfadFRSR6o2WtzwsKrK_qTXv6oa-nxmWUAXM_Zg");
         
         try {
             const response = await fetch(getLogUrl, { method: 'GET' });
+            checkServerClockDrift(response);
             if (!response.ok) throw new Error(`讀取歷史紀錄失敗 (HTTP ${response.status})`);
             const cloudLogs = await response.json();
 
@@ -583,7 +724,15 @@
 
                 if (!rawName.includes("[新批") && !rawName.includes("[解凍]")) {
                     const expTimestamp = parseExpireTimestamp(expireDate, matchedReagent ? matchedReagent.validDays : 0);
-                    dashboardData[uniqueKey] = { machine, name: cleanName, lotNumber, openDate, expireDate, expireTimestamp: expTimestamp, empId };
+                    dashboardData[uniqueKey] = {
+                        machine: sanitizeInputText(machine),
+                        name: sanitizeInputText(cleanName),
+                        lotNumber: sanitizeInputText(lotNumber),
+                        openDate: sanitizeInputText(openDate),
+                        expireDate: sanitizeInputText(expireDate),
+                        expireTimestamp: expTimestamp,
+                        empId: sanitizeInputText(empId)
+                    };
                 }
             });
 
@@ -592,13 +741,13 @@
 
         } catch (error) {
             console.error("❌ 同步歷史面板失敗:", error);
-            // 歷史面板讀取失敗通常只影響右側，不影響左側出庫操作，故印出警告即可
         } finally {
             renderHistory();
         }
     }
 
     window.addEventListener('DOMContentLoaded', () => {
+        updateTokenBtnStyle();
         loadReagentsFromCloud();
     });
 
@@ -697,19 +846,28 @@
         card.querySelector('.out-date-label').textContent = dataObj.dateLabel;
     }
 
+    // 🌟 修正：使用 DOM API 與 escapeHtml 防範解凍歷史紀錄之 XSS
     function populateThawRecords(reagentName) {
         let log = JSON.parse(localStorage.getItem('reagentUsageLog')) || [];
-        let records = log.filter(r => r.name.includes("[解凍]") && r.name.includes(reagentName));
+        let records = log.filter(r => r.name && r.name.includes("[解凍]") && r.name.includes(reagentName));
         records = records.reverse().slice(0, 2);
 
         const select = document.getElementById('pastThawSelect');
         select.innerHTML = '';
         if (records.length === 0) {
-            select.innerHTML = '<option value="">-- 無歷史紀錄，重新計算 --</option>';
+            const emptyOpt = document.createElement('option');
+            emptyOpt.value = "";
+            emptyOpt.textContent = "-- 無歷史紀錄，重新計算 --";
+            select.appendChild(emptyOpt);
         } else {
             records.forEach((r, i) => {
-                const printTimeShort = r.printTime.split(' ')[0];
-                select.innerHTML += `<option value="${i}" data-thaw="${r.openDate}" data-exp="${r.expireDate}">紀錄日: ${printTimeShort} (解凍日: ${r.openDate})</option>`;
+                const printTimeShort = (r.printTime || "").split(' ')[0];
+                const opt = document.createElement('option');
+                opt.value = String(i);
+                opt.setAttribute('data-thaw', sanitizeInputText(r.openDate));
+                opt.setAttribute('data-exp', sanitizeInputText(r.expireDate));
+                opt.textContent = `紀錄日: ${printTimeShort} (解凍日: ${r.openDate})`;
+                select.appendChild(opt);
             });
         }
     }
@@ -728,8 +886,10 @@
         const today = new Date();
         const empIdValue = empIdInput.value.trim() === "" ? "未輸入" : empIdInput.value;
 
-        const isNewLot = document.getElementById('chkNewLot').checked;
-        const isThaw = document.getElementById('chkThaw').checked;
+        const chkNewLotEl = document.getElementById('chkNewLot');
+        const chkThawEl = document.getElementById('chkThaw');
+        const isNewLot = chkNewLotEl ? chkNewLotEl.checked : false;
+        const isThaw = chkThawEl ? chkThawEl.checked : false;
 
         let displayName = selectedReagent.name;
         if (selectedMachineStr === "7" || selectedMachineStr === "8" || selectedMachineStr === "9") {
@@ -771,7 +931,7 @@
 
         // 🌟 處理卡片一 (通用 / 低濃度L) 批號
         if (selectedMachineStr === "7" || selectedMachineStr === "8" || selectedMachineStr === "9") {
-            const lotVal = document.getElementById('lotNumber').value.trim();
+            const lotVal = sanitizeInputText(document.getElementById('lotNumber').value.trim());
             if (lotVal) {
                 cardData.lotNumText = "Lot: " + lotVal;
             } else {
@@ -845,7 +1005,7 @@
             
             // 🌟 處理卡片二 (高濃度H) 的獨立批號
             if (selectedMachineStr === "7" || selectedMachineStr === "8" || selectedMachineStr === "9") {
-                const lotValH = document.getElementById('lotNumberH').value.trim();
+                const lotValH = sanitizeInputText(document.getElementById('lotNumberH').value.trim());
                 if (lotValH) {
                     cardData2.lotNumText = "Lot: " + lotValH; 
                 } else {
@@ -870,7 +1030,6 @@
         } else {
             lotGroup.style.display = 'none';
             document.getElementById('lotNumber').value = ''; 
-            // 切換非適用機台時，一併清空與隱藏高濃度欄位
             if(document.getElementById('lotNumberH')) {
                 document.getElementById('lotNumberH').value = ''; 
                 document.getElementById('lotNumberHGroup').style.display = 'none';
@@ -909,7 +1068,6 @@
         document.getElementById('specialActionGroup').style.display = 'none';
         document.getElementById('pastThawGroup').style.display = 'none';
         
-        // 切換類型時，隱藏高濃度輸入框
         if(document.getElementById('lotNumberHGroup')) {
             document.getElementById('lotNumberHGroup').style.display = 'none';
         }
@@ -938,7 +1096,7 @@
         const wrapperThaw = document.getElementById('thawCheckWrapper');
         
         document.getElementById('chkNewLot').checked = false;
-        document.getElementById('chkThaw').checked = false;
+        if (document.getElementById('chkThaw')) document.getElementById('chkThaw').checked = false;
         document.getElementById('pastThawGroup').style.display = 'none';
 
         if (selectedIndex === "") {
@@ -964,12 +1122,10 @@
             showSpecialGroup = true;
             populateThawRecords(selectedReagent.name);
             
-            // 🌟 新增：針對 MAS 的動態 UI 提示
+            // 🌟 針對 MAS 的動態 UI 提示
             const thawCheckboxLabel = wrapperThaw.querySelector('.checkbox-wrapper');
-            const chkThawInput = document.getElementById('chkThaw');
             
             if (selectedReagent.name.includes("MAS 1") || selectedReagent.name.includes("MAS 3")) {
-                // 替換原本的 checkbox HTML 結構，加入明顯的文字提示
                 thawCheckboxLabel.innerHTML = `
                     <div style="background-color: #ffeaa7; padding: 8px; border-radius: 4px; width: 100%;">
                         <div style="color: #d35400; font-weight: bold; margin-bottom: 5px;">⚠️ 請問您現在要執行哪一種作業？</div>
@@ -981,14 +1137,11 @@
                             <input type="radio" name="masActionType" value="open" onchange="document.getElementById('chkThaw').checked = false; updatePreview();" style="margin-right:8px; width:auto;"> 
                             2️⃣ 已經解凍完畢，準備執行【開瓶作業】
                         </label>
-                        <!-- 隱藏原本的 checkbox，由 radio 控制 -->
                         <input type="checkbox" id="chkThaw" style="display:none;" onchange="updatePreview()">
                     </div>
                 `;
-                // 預設選中解凍
                 document.getElementById('chkThaw').checked = true;
             } else {
-                // 恢復原本其他試劑的 checkbox 樣式
                 thawCheckboxLabel.innerHTML = `
                     <input type="checkbox" id="chkThaw" onchange="updatePreview()"> 執行【解凍作業】(不開瓶)
                 `;
@@ -1009,7 +1162,7 @@
                 lotGroupH.style.display = 'block';
             } else {
                 lotGroupH.style.display = 'none';
-                document.getElementById('lotNumberH').value = ''; // 隱藏時順便清空
+                document.getElementById('lotNumberH').value = '';
             }
         }
         
@@ -1036,20 +1189,25 @@
         if (previewContainer.style.display !== 'none') updatePreview();
     });
 
-    // 🌟 綁定批號即時預覽事件
+    // 🌟 綁定批號即時預覽事件並即時過濾危險 HTML 字元 (XSS 防護)
     document.getElementById('lotNumber').addEventListener('input', function() {
+        const cleaned = sanitizeInputText(this.value);
+        if (this.value !== cleaned) this.value = cleaned;
         if (previewContainer.style.display !== 'none') updatePreview();
     });
     document.getElementById('lotNumberH').addEventListener('input', function() {
+        const cleaned = sanitizeInputText(this.value);
+        if (this.value !== cleaned) this.value = cleaned;
         if (previewContainer.style.display !== 'none') updatePreview();
     });
 
     // ==========================================
-    // ★ 管理員系統功能 ★
+    // ★ 管理員與科室通行碼系統功能 ★
     // ==========================================
     function toggleAdmin() {
         if (isAdmin) {
             isAdmin = false;
+            sessionAdminHash = "";
             const btn = document.getElementById('adminToggleBtn');
             btn.innerHTML = "🔒 管理員登入";
             btn.classList.remove('admin-active');
@@ -1060,10 +1218,13 @@
         }
     }
 
-    function submitLogin() {
+    // 🛡️ 改用 SHA-256 雜湊比對密碼，不在原始碼暴露明文密碼
+    async function submitLogin() {
         const pwd = document.getElementById('adminPwd').value;
-        if (pwd === "6300") {
+        const inputHash = await computeSha256(pwd);
+        if (inputHash === ADMIN_PASSWORD_HASH) {
             isAdmin = true;
+            sessionAdminHash = inputHash;
             const btn = document.getElementById('adminToggleBtn');
             btn.innerHTML = "🔓 退出管理員";
             btn.classList.add('admin-active');
@@ -1076,13 +1237,33 @@
         }
     }
 
+    function openTokenModal() {
+        document.getElementById('labTokenInput').value = getLabToken();
+        document.getElementById('tokenModal').style.display = 'flex';
+        document.getElementById('labTokenInput').focus();
+    }
+
+    async function saveTokenSetting() {
+        const val = document.getElementById('labTokenInput').value.trim();
+        if (val) {
+            localStorage.setItem(LAB_TOKEN_KEY, val);
+        } else {
+            localStorage.removeItem(LAB_TOKEN_KEY);
+        }
+        updateTokenBtnStyle();
+        closeModals();
+        await loadReagentsFromCloud();
+    }
+
     function closeModals() {
         document.getElementById('loginModal').style.display = 'none';
         document.getElementById('editModal').style.display = 'none';
+        document.getElementById('tokenModal').style.display = 'none';
         document.getElementById('adminPwd').value = '';
     }
 
     function openEditModal(key) {
+        if (!isAdmin) return;
         currentEditKey = key;
         const data = loadDashboardData();
         const record = data[key];
@@ -1093,17 +1274,70 @@
         document.getElementById('editModal').style.display = 'flex';
     }
 
-    function saveEdit() {
-        const openDateStr = document.getElementById('editOpenDate').value.trim();
-        const expireDateStr = document.getElementById('editExpireDate').value.trim();
-        const data = loadDashboardData();
-        if (!data[currentEditKey]) { closeModals(); return; }
-
-        data[currentEditKey].openDate = openDateStr;
-        data[currentEditKey].expireDate = expireDateStr;
-        data[currentEditKey].expireTimestamp = parseExpireTimestamp(expireDateStr, 0);
+    // 🛡️ 修正：管理員修改效期後，同步發送 POST 寫入 SharePoint 雲端資料庫，確保重新整理與各機台皆同步
+    async function saveEdit() {
+        if (!isAdmin || !sessionAdminHash) {
+            alert("⚠️ 管理員權限未驗證！");
+            closeModals();
+            return;
+        }
+        const openDateStr = sanitizeInputText(document.getElementById('editOpenDate').value.trim());
+        const expireDateStr = sanitizeInputText(document.getElementById('editExpireDate').value.trim());
         
+        const datePattern = /^\d{2,4}[\/\-]\d{2}[\/\-]\d{2}$/;
+        if (!datePattern.test(openDateStr) || !datePattern.test(expireDateStr)) {
+            alert("⚠️ 日期格式不正確！請使用 YY/MM/DD 格式 (例如: 26/11/10)。");
+            return;
+        }
+
+        const data = loadDashboardData();
+        const record = data[currentEditKey];
+        if (!record) { closeModals(); return; }
+
+        const saveBtn = document.getElementById('editSaveBtn');
+        const origBtnText = saveBtn.textContent;
+        saveBtn.disabled = true;
+        saveBtn.textContent = "⏳ 同步雲端中...";
+
+        record.openDate = openDateStr;
+        record.expireDate = expireDateStr;
+        record.expireTimestamp = parseExpireTimestamp(expireDateStr, 0);
+        
+        const printTimestamp = new Date();
+        const matchedReagent = reagentData.find(r => r.name === record.name);
+        const logData = {
+            printTime: printTimestamp.toLocaleString('zh-TW', { hour12: false }), 
+            machine: record.machine,
+            category: matchedReagent ? matchedReagent.category : "",
+            name: "[修改] " + record.name, 
+            openDate: openDateStr,
+            expireDate: expireDateStr,
+            empId: "管理員修改",
+            lotNumber: record.lotNumber || "",
+            labToken: getLabToken(),
+            adminHash: sessionAdminHash
+        };
+
+        const postUrl = appendTokenToUrl("https://defaulta2bef7fe039e4eeebc6a1e7e6ffaaf.b3.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/06/workflows/280bf053930a4bcba21e0f9c04725d97/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=b9ObHcylaV1UUUZkFW1CuW9zWEGTQpi35-I45n7B6Dk");
+
+        try {
+            const res = await fetch(postUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(logData)
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            console.log("✅ 管理員修改已同步至 SharePoint");
+        } catch (e) {
+            console.error("❌ 雲端修改同步失敗:", e);
+            alert("⚠️ 網路連線異常，修改僅暫存於本機，未同步至雲端後台。");
+        } finally {
+            saveBtn.disabled = false;
+            saveBtn.textContent = origBtnText;
+        }
+
         saveDashboardData(data);
+        appendUsageLog(logData);
         closeModals();
         renderHistory();
     }
@@ -1139,14 +1373,14 @@
         const currentEmpId = empIdInput.value.trim() === "" ? "未輸入" : empIdInput.value.trim();
         const selectedMachineStr = machineSelect.value;
         
-        // 🌟 串接高低濃度批號記錄到歷史面板與資料庫
+        // 🌟 串接高低濃度批號記錄到歷史面板與資料庫 (並過濾危險字元)
         let lotNumValue = "";
         if (selectedMachineStr === "7" || selectedMachineStr === "8" || selectedMachineStr === "9") {
-            lotNumValue = document.getElementById('lotNumber').value.trim();
+            lotNumValue = sanitizeInputText(document.getElementById('lotNumber').value.trim());
             const lotGroupH = document.getElementById('lotNumberHGroup');
             
             if (lotGroupH && lotGroupH.style.display !== 'none') {
-                const lotValH = document.getElementById('lotNumberH').value.trim();
+                const lotValH = sanitizeInputText(document.getElementById('lotNumberH').value.trim());
                 if (lotValH) {
                     lotNumValue = `L: ${lotNumValue}, H: ${lotValH}`;
                 }
@@ -1176,10 +1410,11 @@
             openDate: displayedOpen,
             expireDate: displayedExpire,
             empId: currentEmpId,
-            lotNumber: lotNumValue 
+            lotNumber: lotNumValue,
+            labToken: getLabToken()
         };
 
-        const postUrl = "https://defaulta2bef7fe039e4eeebc6a1e7e6ffaaf.b3.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/06/workflows/280bf053930a4bcba21e0f9c04725d97/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=b9ObHcylaV1UUUZkFW1CuW9zWEGTQpi35-I45n7B6Dk";
+        const postUrl = appendTokenToUrl("https://defaulta2bef7fe039e4eeebc6a1e7e6ffaaf.b3.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/06/workflows/280bf053930a4bcba21e0f9c04725d97/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=b9ObHcylaV1UUUZkFW1CuW9zWEGTQpi35-I45n7B6Dk");
 
         try {
             await fetch(postUrl, {
@@ -1238,21 +1473,22 @@
                     else if (diffDays <= 1) { rowClass = "row-warning"; statusText = "⚠️ 明日到期"; cWarning++; } 
                     else cNormal++;
 
+                    const safeUniqueKey = escapeHtml(uniqueKey);
                     let actionHtml = '-';
-                    if (isAdmin) {
-                        // 🌟 修正 Delete 按鈕的 event 傳遞，避免瀏覽器報錯
-                        actionHtml = `<div class="action-btns"><button class="edit-btn" onclick="openEditModal('${uniqueKey}')">✏️</button><button class="del-btn" onclick="deleteRecord(event, '${uniqueKey}')">🗑️</button></div>`;
+                    if (isAdmin && sessionAdminHash) {
+                        // 🛡️ 使用 data-key 與 escapeHtml 防止屬性逃逸與 XSS
+                        actionHtml = `<div class="action-btns"><button class="edit-btn" data-key="${safeUniqueKey}" onclick="openEditModal(this.getAttribute('data-key'))">✏️</button><button class="del-btn" data-key="${safeUniqueKey}" onclick="deleteRecord(event, this.getAttribute('data-key'))">🗑️</button></div>`;
                     }
                     
-                    let nameDisplay = `<strong>${record.name}</strong>`;
+                    let nameDisplay = `<strong>${escapeHtml(record.name)}</strong>`;
                     if (record.lotNumber) {
-                        nameDisplay += `<div style="font-size: 11px; color: #7f8c8d; margin-top: 2px;">Lot: ${record.lotNumber}</div>`;
+                        nameDisplay += `<div style="font-size: 11px; color: #7f8c8d; margin-top: 2px;">Lot: ${escapeHtml(record.lotNumber)}</div>`;
                     }
 
-                    rowsHtml.push(`<tr class="${rowClass}"><td>${nameDisplay}</td><td>${record.openDate}</td><td>${record.expireDate}</td><td>${statusText}</td><td>${record.empId || '-'}</td><td>${actionHtml}</td></tr>`);
+                    rowsHtml.push(`<tr class="${rowClass}"><td>${nameDisplay}</td><td>${escapeHtml(record.openDate)}</td><td>${escapeHtml(record.expireDate)}</td><td>${statusText}</td><td>${escapeHtml(record.empId || '-')}</td><td>${actionHtml}</td></tr>`);
                 } else {
                     cInactive++;
-                    rowsHtml.push(`<tr class="row-inactive"><td>${reagent.name}</td><td>-</td><td>-</td><td>⚪ 尚未開</td><td>-</td><td>-</td></tr>`);
+                    rowsHtml.push(`<tr class="row-inactive"><td>${escapeHtml(reagent.name)}</td><td>-</td><td>-</td><td>⚪ 尚未開</td><td>-</td><td>-</td></tr>`);
                 }
             });
 
@@ -1261,7 +1497,7 @@
             mHeader.className = 'machine-group-title';
             mHeader.innerHTML = `
                 <div style="display: flex; align-items: center; gap: 10px;">
-                    <span>${mName}</span>
+                    <span>${escapeHtml(mName)}</span>
                     <div class="summary-badges" style="display: flex; gap: 5px; font-size: 12px; font-weight: normal;">
                         ${cExpired > 0 ? `<span style="background: #ffcccc; color: #c0392b; padding: 2px 8px; border-radius: 12px;">❌ ${cExpired}</span>` : ''}
                         ${cWarning > 0 ? `<span style="background: #fff3cd; color: #d35400; padding: 2px 8px; border-radius: 12px;">⚠️ ${cWarning}</span>` : ''}
@@ -1290,9 +1526,9 @@
         }
     }
 
-    // 🌟 修正 Delete 的 event 參數接收
+    // 🌟 修正 Delete 的 event 參數接收並附帶管理員雜湊與通行碼
     window.deleteRecord = async function(event, key) {
-        if (!isAdmin) return; 
+        if (!isAdmin || !sessionAdminHash) return; 
         if(event) event.stopPropagation(); 
         if(confirm('確定要「清除」此項目退回「尚未開瓶」嗎？\n(此操作會同步至雲端，所有電腦都會一起更新)')) {
             const dashboardData = loadDashboardData(); 
@@ -1308,10 +1544,12 @@
                     openDate: "-",
                     expireDate: "-",
                     empId: "管理員清除",
-                    lotNumber: "" 
+                    lotNumber: "",
+                    labToken: getLabToken(),
+                    adminHash: sessionAdminHash
                 };
 
-                const postUrl = "https://defaulta2bef7fe039e4eeebc6a1e7e6ffaaf.b3.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/06/workflows/280bf053930a4bcba21e0f9c04725d97/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=b9ObHcylaV1UUUZkFW1CuW9zWEGTQpi35-I45n7B6Dk";
+                const postUrl = appendTokenToUrl("https://defaulta2bef7fe039e4eeebc6a1e7e6ffaaf.b3.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/06/workflows/280bf053930a4bcba21e0f9c04725d97/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=b9ObHcylaV1UUUZkFW1CuW9zWEGTQpi35-I45n7B6Dk");
 
                 try {
                     await fetch(postUrl, {
