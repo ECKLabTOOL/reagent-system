@@ -170,6 +170,83 @@
         .modal-btn-cancel { background: #95a5a6; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; }
         .modal-btn-save { background: #27ae60; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; }
 
+
+        /* --- 防重複開啟滿版阻擋視窗 --- */
+        #instanceLockModal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(30, 41, 59, 0.94);
+            z-index: 9999;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(4px);
+        }
+        .instance-lock-card {
+            background: #fff;
+            padding: 30px 28px;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 420px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+            text-align: center;
+            border-top: 6px solid #e74c3c;
+        }
+        .instance-lock-icon {
+            font-size: 48px;
+            margin-bottom: 10px;
+            line-height: 1;
+        }
+        .instance-lock-card h3 {
+            margin: 0 0 12px 0;
+            color: #c0392b;
+            font-size: 22px;
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+        .instance-lock-card p {
+            font-size: 14.5px;
+            color: #444;
+            line-height: 1.6;
+            margin: 0 0 22px 0;
+            text-align: left;
+            background: #fdf2e9;
+            padding: 12px 15px;
+            border-radius: 6px;
+            border-left: 4px solid #e67e22;
+        }
+        .instance-lock-btns {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .instance-btn-close {
+            background: #e74c3c;
+            color: white;
+            border: none;
+            padding: 11px 16px;
+            border-radius: 6px;
+            font-size: 15px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .instance-btn-close:hover { background: #c0392b; }
+        .instance-btn-takeover {
+            background: transparent;
+            color: #7f8c8d;
+            border: 1px solid #bdc3c7;
+            padding: 8px 14px;
+            border-radius: 6px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .instance-btn-takeover:hover {
+            background: #ecf0f1;
+            color: #2c3e50;
+        }
+
         /* ========================================================
            🌟 核心修改：列印專用排版 (@media print)
            ======================================================== */
@@ -411,6 +488,22 @@
         <div class="modal-btn-group">
             <button class="modal-btn-cancel" onclick="closeModals()">取消</button>
             <button class="modal-btn-save" id="editSaveBtn" onclick="saveEdit()">💾 儲存並同步雲端</button>
+        </div>
+    </div>
+</div>
+
+<!-- 防重複開啟阻擋 Modal -->
+<div class="modal-overlay" id="instanceLockModal">
+    <div class="instance-lock-card">
+        <div class="instance-lock-icon">⚠️</div>
+        <h3 id="instanceLockTitle">本程序已運行！</h3>
+        <p id="instanceLockDesc">
+            系統偵測到這台電腦已經開啟了一個<strong>【大實驗組試劑效期標籤小工具】</strong>視窗或分頁。<br><br>
+            為避免多視窗同時操作造成試劑效期與雲端資料衝突，請切換至已開啟的視窗繼續使用，並關閉此重複視窗。
+        </p>
+        <div class="instance-lock-btns">
+            <button class="instance-btn-close" onclick="closeDuplicateWindow()">❌ 關閉此重複視窗</button>
+            <button class="instance-btn-takeover" onclick="forceTakeoverInstance()">🔄 找不到原視窗？強制在此視窗接管運行</button>
         </div>
     </div>
 </div>
@@ -746,7 +839,197 @@
         }
     }
 
-    window.addEventListener('DOMContentLoaded', () => {
+    // ==========================================
+    // 🚫 防重複開啟保護機制 (Single Instance Guard)
+    // ==========================================
+    const INSTANCE_LOCK_NAME = 'reagent_system_single_instance_lock_v1';
+    const INSTANCE_STORAGE_KEY = 'reagent_active_instance_heartbeat_v1';
+    const INSTANCE_CHANNEL_NAME = 'reagent_system_instance_channel_v1';
+    const CURRENT_INSTANCE_ID = Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 8);
+    
+    let isDuplicateBlocked = false;
+    let releaseWebLockResolver = null;
+    let heartbeatTimer = null;
+    let instanceChannel = null;
+
+    function triggerDuplicateBlock(customTitle, customDesc, skipAlert) {
+        isDuplicateBlocked = true;
+        if (heartbeatTimer) {
+            clearInterval(heartbeatTimer);
+            heartbeatTimer = null;
+        }
+        if (releaseWebLockResolver) {
+            releaseWebLockResolver();
+            releaseWebLockResolver = null;
+        }
+        const mainWrapper = document.querySelector('.main-wrapper');
+        if (mainWrapper) mainWrapper.style.display = 'none';
+
+        if (customTitle) document.getElementById('instanceLockTitle').textContent = customTitle;
+        if (customDesc) document.getElementById('instanceLockDesc').innerHTML = customDesc;
+
+        const lockModal = document.getElementById('instanceLockModal');
+        if (lockModal) lockModal.style.display = 'flex';
+        document.title = "⚠️ 本程序已運行 - 大實驗組試劑效期標籤小工具";
+
+        if (!skipAlert) {
+            setTimeout(() => {
+                alert("⚠️ 本程序已運行！\n\n系統偵測到這台電腦已經開啟本應用程式，請切換至原視窗繼續操作。");
+            }, 60);
+        }
+    }
+
+    function closeDuplicateWindow() {
+        window.close();
+        setTimeout(() => {
+            alert("💡 若瀏覽器限制自動關閉分頁，請直接點擊視窗右上角的「✕」或按下鍵盤 Ctrl + W 關閉此分頁。");
+        }, 150);
+    }
+
+    function startInstanceHeartbeat() {
+        const writeBeat = () => {
+            if (!isDuplicateBlocked) {
+                localStorage.setItem(INSTANCE_STORAGE_KEY, JSON.stringify({
+                    id: CURRENT_INSTANCE_ID,
+                    ts: Date.now()
+                }));
+            }
+        };
+        writeBeat();
+        if (heartbeatTimer) clearInterval(heartbeatTimer);
+        heartbeatTimer = setInterval(writeBeat, 2000);
+    }
+
+    function setupInstanceCommunication() {
+        if ('BroadcastChannel' in window) {
+            instanceChannel = new BroadcastChannel(INSTANCE_CHANNEL_NAME);
+            instanceChannel.onmessage = (event) => {
+                const msg = event.data;
+                if (!msg || msg.senderId === CURRENT_INSTANCE_ID) return;
+
+                if (msg.type === 'CHECK_ALIVE' && !isDuplicateBlocked) {
+                    instanceChannel.postMessage({
+                        type: 'I_AM_ALIVE',
+                        senderId: CURRENT_INSTANCE_ID
+                    });
+                } else if (msg.type === 'I_AM_ALIVE' && !isDuplicateBlocked) {
+                    // 若在啟動瞬間收到其他已運行視窗的回應
+                    if (!releaseWebLockResolver) {
+                        triggerDuplicateBlock();
+                    }
+                } else if (msg.type === 'FORCE_TAKEOVER' && !isDuplicateBlocked) {
+                    // 使用者在新視窗點擊了「強制接管」，將舊視窗切換為阻擋狀態
+                    triggerDuplicateBlock(
+                        "已切換至新視窗運行",
+                        "您已在另一個新開的視窗中執行<strong>「強制接管運行」</strong>。<br><br>本舊視窗已自動停用，請直接關閉此視窗，並於新視窗繼續操作。",
+                        true
+                    );
+                }
+            };
+        }
+
+        // 監聽 localStorage 變化作為無 BroadcastChannel 環境之備援
+        window.addEventListener('storage', (e) => {
+            if (e.key === INSTANCE_STORAGE_KEY && e.newValue && !isDuplicateBlocked) {
+                try {
+                    const data = JSON.parse(e.newValue);
+                    if (data.forceTakeover && data.id !== CURRENT_INSTANCE_ID) {
+                        triggerDuplicateBlock(
+                            "已切換至新視窗運行",
+                            "您已在另一個新開的視窗中執行<strong>「強制接管運行」</strong>。<br><br>本舊視窗已自動停用，請直接關閉此視窗，並於新視窗繼續操作。",
+                            true
+                        );
+                    }
+                } catch (err) {}
+            }
+        });
+
+        // 當視窗關閉或按 F5 重新整理時，立即釋放本機心跳紀錄，確保 F5 重新整理不會誤判
+        const clearOwnHeartbeat = () => {
+            try {
+                const raw = localStorage.getItem(INSTANCE_STORAGE_KEY);
+                if (raw) {
+                    const parsed = JSON.parse(raw);
+                    if (parsed.id === CURRENT_INSTANCE_ID) {
+                        localStorage.removeItem(INSTANCE_STORAGE_KEY);
+                    }
+                }
+            } catch (e) {}
+        };
+        window.addEventListener('pagehide', clearOwnHeartbeat);
+        window.addEventListener('unload', clearOwnHeartbeat);
+    }
+
+    async function acquireSingleInstanceLock() {
+        setupInstanceCommunication();
+
+        // 優先使用瀏覽器核心級 Web Locks API (支援 HTTPS / GitHub Pages / PWA，關閉或重整視窗時 0 秒自動釋放)
+        if (navigator.locks && navigator.locks.request) {
+            return new Promise((resolve) => {
+                navigator.locks.request(INSTANCE_LOCK_NAME, { ifAvailable: true }, async (lock) => {
+                    if (!lock) {
+                        resolve(false);
+                        return;
+                    }
+                    startInstanceHeartbeat();
+                    resolve(true);
+                    // 持續持有 Lock 直到視窗關閉或被強制接管
+                    await new Promise((r) => { releaseWebLockResolver = r; });
+                });
+            });
+        }
+
+        // 備援方案 (如本機 file:// 直接開啟)：檢查 localStorage 心跳是否在 4.5 秒內活躍
+        try {
+            const raw = localStorage.getItem(INSTANCE_STORAGE_KEY);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed.id !== CURRENT_INSTANCE_ID && (Date.now() - parsed.ts) < 4500) {
+                    return false;
+                }
+            }
+        } catch (e) {}
+
+        startInstanceHeartbeat();
+        return true;
+    }
+
+    async function forceTakeoverInstance() {
+        if (instanceChannel) {
+            instanceChannel.postMessage({
+                type: 'FORCE_TAKEOVER',
+                senderId: CURRENT_INSTANCE_ID
+            });
+        }
+        localStorage.setItem(INSTANCE_STORAGE_KEY, JSON.stringify({
+            id: CURRENT_INSTANCE_ID,
+            ts: Date.now(),
+            forceTakeover: true
+        }));
+
+        isDuplicateBlocked = false;
+        document.title = "大實驗組試劑效期標籤小工具";
+        document.getElementById('instanceLockModal').style.display = 'none';
+        const mainWrapper = document.querySelector('.main-wrapper');
+        if (mainWrapper) mainWrapper.style.display = 'flex';
+
+        startInstanceHeartbeat();
+        // 重新排隊取得 Web Lock
+        if (navigator.locks && navigator.locks.request) {
+            navigator.locks.request(INSTANCE_LOCK_NAME, async () => {
+                await new Promise((r) => { releaseWebLockResolver = r; });
+            });
+        }
+        updateTokenBtnStyle();
+        await loadReagentsFromCloud();
+    }
+
+    window.addEventListener('DOMContentLoaded', async () => {
+        const canRun = await acquireSingleInstanceLock();
+        if (!canRun) {
+            triggerDuplicateBlock();
+            return;
+        }
         updateTokenBtnStyle();
         loadReagentsFromCloud();
     });
@@ -1612,7 +1895,11 @@
         window.print();
     }
 
-    window.addEventListener('beforeunload', e => { e.preventDefault(); e.returnValue = ''; });
+    window.addEventListener('beforeunload', e => {
+        if (isDuplicateBlocked) return;
+        e.preventDefault();
+        e.returnValue = '';
+    });
 </script>
 </body>
 </html>
