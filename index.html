@@ -146,6 +146,28 @@
         .admin-toggle-btn:hover { background: #ecf0f1; color: #2c3e50; }
         .admin-active { background: #e74c3c !important; color: white !important; border-color: #c0392b !important; }
         .token-active { background: #eafaf1 !important; color: #27ae60 !important; border-color: #2ecc71 !important; }
+        .header-btn-group { display: flex; align-items: center; gap: 8px; }
+        .last-sync-text { font-size: 11.5px; color: #7f8c8d; white-space: nowrap; }
+        .sync-cloud-btn {
+            background-color: #eaf2f8;
+            border: 1px solid #3498db;
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            color: #2980b9;
+            transition: 0.2s;
+            font-weight: bold;
+            white-space: nowrap;
+        }
+        .sync-cloud-btn:hover:not(:disabled) {
+            background-color: #3498db;
+            color: white;
+        }
+        .sync-cloud-btn:disabled {
+            opacity: 0.65;
+            cursor: not-allowed;
+        }
         
         .machine-group-title { background-color: #ecf0f1; padding: 8px 12px; margin-top: 15px; margin-bottom: 0; border-left: 4px solid #3498db; color: #2c3e50; font-size: 15px; font-weight: bold; border-top-left-radius: 4px; border-top-right-radius: 4px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; transition: 0.2s; }
         .machine-group-title:hover { background-color: #dadddf; }
@@ -170,6 +192,65 @@
         .modal-btn-cancel { background: #95a5a6; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; }
         .modal-btn-save { background: #27ae60; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-weight: bold; }
 
+
+
+        /* --- 右側面板：資料庫連線載入動畫 --- */
+        .db-loading-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 55px 20px;
+            color: #2c3e50;
+            text-align: center;
+            background: rgba(236, 240, 241, 0.45);
+            border-radius: 8px;
+            border: 1px dashed #bdc3c7;
+            margin-top: 10px;
+        }
+        .db-spinner {
+            width: 44px;
+            height: 44px;
+            border: 4px solid #dce4ec;
+            border-top: 4px solid #3498db;
+            border-right: 4px solid #1abc9c;
+            border-radius: 50%;
+            animation: dbSpin 0.85s linear infinite;
+            margin-bottom: 16px;
+        }
+        @keyframes dbSpin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .db-loading-title {
+            font-size: 16px;
+            font-weight: bold;
+            color: #2980b9;
+            letter-spacing: 1px;
+            animation: dbPulse 1.5s ease-in-out infinite;
+        }
+        .db-loading-sub {
+            font-size: 13px;
+            color: #7f8c8d;
+            margin-top: 6px;
+        }
+        @keyframes dbPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .db-error-retry-btn {
+            margin-top: 14px;
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 7px 16px;
+            border-radius: 5px;
+            font-size: 13px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .db-error-retry-btn:hover { background: #2980b9; }
 
         /* --- 防重複開啟滿版阻擋視窗 --- */
         #instanceLockModal {
@@ -434,9 +515,18 @@
                 <button class="admin-toggle-btn" id="adminToggleBtn" onclick="toggleAdmin()">🔒 管理員登入</button>
                 <button class="admin-toggle-btn" id="tokenSettingBtn" onclick="openTokenModal()" title="設定雲端 API 科室通行碼">🔑 通行碼</button>
             </div>
-            <div class="header-btn-group"></div>
+            <div class="header-btn-group">
+                <span class="last-sync-text" id="lastSyncTimeText">連線中...</span>
+                <button class="sync-cloud-btn" id="manualSyncBtn" onclick="manualSyncCloud()" title="立即從雲端重新同步最新試劑清單與效期狀態">🔄 立即同步雲端</button>
+            </div>
         </div>
-        <div id="historyContainer"></div>
+        <div id="historyContainer">
+            <div class="db-loading-wrapper">
+                <div class="db-spinner"></div>
+                <div class="db-loading-title">【連線至資料庫中】</div>
+                <div class="db-loading-sub">正在與雲端資料庫建立連線，請稍候...</div>
+            </div>
+        </div>
     </div>
 </div> 
 
@@ -679,8 +769,61 @@
         return fallback.getTime();
     }
 
+    // 🌟 控制手動同步按鈕狀態與最後同步時間
+    function setSyncButtonState(isSyncing) {
+        const btn = document.getElementById('manualSyncBtn');
+        if (!btn) return;
+        if (isSyncing) {
+            btn.disabled = true;
+            btn.innerHTML = "⏳ 同步中...";
+        } else {
+            btn.disabled = false;
+            btn.innerHTML = "🔄 立即同步雲端";
+        }
+    }
+
+    function updateLastSyncTime(isSuccess = true) {
+        const textEl = document.getElementById('lastSyncTimeText');
+        if (!textEl) return;
+        if (isSuccess) {
+            const now = new Date();
+            const timeStr = now.toTimeString().split(' ')[0];
+            textEl.textContent = `最後更新: ${timeStr}`;
+            textEl.style.color = '#7f8c8d';
+        } else {
+            textEl.textContent = '同步失敗';
+            textEl.style.color = '#e74c3c';
+        }
+    }
+
+    // 🌟 手動觸發雲端同步按鈕
+    async function manualSyncCloud() {
+        const btn = document.getElementById('manualSyncBtn');
+        if (btn && btn.disabled) return;
+        if (reagentData.length === 0) {
+            await loadReagentsFromCloud();
+        } else {
+            await syncDashboardFromCloud();
+        }
+    }
+
+    // 🌟 顯示右側面板連線中動畫
+    function showDbLoading(subText = "正在與雲端資料庫建立連線，請稍候...") {
+        const historyContainer = document.getElementById('historyContainer');
+        if (!historyContainer) return;
+        historyContainer.innerHTML = `
+            <div class="db-loading-wrapper">
+                <div class="db-spinner"></div>
+                <div class="db-loading-title">【連線至資料庫中】</div>
+                <div class="db-loading-sub">${escapeHtml(subText)}</div>
+            </div>
+        `;
+    }
+
     // 🌟 1. 帶有強力除錯功能的出庫試劑讀取
     async function loadReagentsFromCloud() {
+        setSyncButtonState(true);
+        showDbLoading("正在讀取雲端試劑品項清單...");
         const getUrl = appendTokenToUrl("https://defaulta2bef7fe039e4eeebc6a1e7e6ffaaf.b3.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/09/workflows/2c55c100fe01408c8e0172524d56c7eb/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=D1YIFe76r_Fngcz7liZDVng5qkJsUReGa9WRTl8-PX0");
         try {
             const response = await fetch(getUrl, { method: 'GET' });
@@ -725,12 +868,27 @@
             await syncDashboardFromCloud(); 
         } catch (error) {
             console.error("❌ 載入失敗:", error);
+            setSyncButtonState(false);
+            updateLastSyncTime(false);
+            const historyContainer = document.getElementById('historyContainer');
+            if (historyContainer) {
+                historyContainer.innerHTML = `
+                    <div class="db-loading-wrapper" style="border-color: #e74c3c; background: rgba(253, 237, 236, 0.6);">
+                        <div style="font-size: 34px; margin-bottom: 10px;">⚠️</div>
+                        <div style="font-size: 16px; font-weight: bold; color: #c0392b;">【資料庫連線失敗】</div>
+                        <div class="db-loading-sub" style="color: #922b21; margin-top: 6px;">${escapeHtml(error.message)}</div>
+                        <button class="db-error-retry-btn" onclick="loadReagentsFromCloud()">🔄 重新嘗試連線</button>
+                    </div>
+                `;
+            }
             alert("⚠️ 資料庫連線失敗！\n\n詳細原因：\n" + error.message + "\n\n(若是 401/403 錯誤，請檢查科室通行碼或 Power Automate 網址授權碼；若是 Failed to fetch，請檢查醫院防火牆或網路連線)");
         }
     }
 
     // 🌟 2. 更嚴謹的戰情面板同步 (防止 logsArray 解析失敗)
     async function syncDashboardFromCloud() {
+        setSyncButtonState(true);
+        showDbLoading("正在從雲端同步各機台最新效期狀態...");
         const getLogUrl = appendTokenToUrl("https://defaulta2bef7fe039e4eeebc6a1e7e6ffaaf.b3.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/26/workflows/f26220adf84f4b48bb2f4c815ba94c25/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=LcDyVfadFRSR6o2WtzwsKrK_qTXv6oa-nxmWUAXM_Zg");
         
         try {
@@ -830,11 +988,14 @@
             });
 
             saveDashboardData(dashboardData);
+            updateLastSyncTime(true);
             console.log("✅ 成功與 Reagent_Usagelog 資料庫連動同步！");
 
         } catch (error) {
             console.error("❌ 同步歷史面板失敗:", error);
+            updateLastSyncTime(false);
         } finally {
+            setSyncButtonState(false);
             renderHistory();
         }
     }
