@@ -252,6 +252,85 @@
         }
         .db-error-retry-btn:hover { background: #2980b9; }
 
+
+        /* --- 閒置 5 分鐘自動關閉：倒數提示橫幅與關閉畫面 --- */
+        #idleWarningToast {
+            display: none;
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(192, 57, 43, 0.95);
+            color: #fff;
+            padding: 10px 20px;
+            border-radius: 30px;
+            font-size: 14px;
+            font-weight: bold;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            z-index: 9500;
+            align-items: center;
+            gap: 8px;
+            white-space: nowrap;
+            pointer-events: none;
+        }
+        #idleClosedModal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(20, 30, 48, 0.95);
+            z-index: 10000;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(5px);
+        }
+        .idle-closed-card {
+            background: #fff;
+            padding: 30px 28px;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 420px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+            text-align: center;
+            border-top: 6px solid #3498db;
+        }
+        .idle-closed-icon {
+            font-size: 48px;
+            margin-bottom: 10px;
+            line-height: 1;
+        }
+        .idle-closed-card h3 {
+            margin: 0 0 12px 0;
+            color: #2c3e50;
+            font-size: 21px;
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+        .idle-closed-card p {
+            font-size: 14px;
+            color: #444;
+            line-height: 1.6;
+            margin: 0 0 22px 0;
+            text-align: left;
+            background: #ebf5fb;
+            padding: 12px 15px;
+            border-radius: 6px;
+            border-left: 4px solid #3498db;
+        }
+        .idle-restart-btn {
+            background: #2980b9;
+            color: white;
+            border: none;
+            padding: 11px 16px;
+            border-radius: 6px;
+            font-size: 15px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+            width: 100%;
+            margin-bottom: 8px;
+        }
+        .idle-restart-btn:hover { background: #3498db; }
+
         /* --- 防重複開啟滿版阻擋視窗 --- */
         #instanceLockModal {
             display: none;
@@ -335,7 +414,7 @@
             @page { margin: 0; }
             body { background-image: none !important; background-color: white !important; padding: 0 !important; margin: 0 !important; font-family: '微軟正黑體', 'Microsoft JhengHei', sans-serif !important; }
             .main-wrapper, .container { display: block !important; padding: 0 !important; margin: 0 !important; border: none !important; box-shadow: none !important; position: static !important; width: auto !important; max-width: none !important; }
-            h2, .form-group, #specialActionGroup, #pastThawGroup, .format-group, .print-btn, #historySection, .modal-overlay { display: none !important; }
+            h2, .form-group, #specialActionGroup, #pastThawGroup, .format-group, .print-btn, #historySection, .modal-overlay, #idleWarningToast { display: none !important; }
             
             #previewContainer { margin: 0 !important; padding: 0 !important; border: none !important; }
 
@@ -595,6 +674,25 @@
             <button class="instance-btn-close" onclick="closeDuplicateWindow()">❌ 關閉此重複視窗</button>
             <button class="instance-btn-takeover" onclick="forceTakeoverInstance()">🔄 找不到原視窗？強制在此視窗接管運行</button>
         </div>
+    </div>
+</div>
+
+<!-- 閒置倒數提醒浮動橫幅 -->
+<div id="idleWarningToast">
+    ⏳ 系統閒置中，將於 <span id="idleCountdownSec">30</span> 秒後自動關閉（移動滑鼠或按任意鍵即可繼續使用）
+</div>
+
+<!-- 閒置逾 5 分鐘自動關閉 Modal (當瀏覽器限制直接關閉分頁時顯示) -->
+<div class="modal-overlay" id="idleClosedModal">
+    <div class="idle-closed-card">
+        <div class="idle-closed-icon">💤</div>
+        <h3>程序閒置逾 5 分鐘已自動關閉</h3>
+        <p>
+            系統偵測到超過 <strong>5 分鐘</strong>無任何操作，為確保實驗室資安並釋放機台資源，本程序已自動終止連線並釋放單一視窗鎖定。<br><br>
+            若您的瀏覽器分頁未自動關閉，可直接關閉此視窗，或點擊下方按鈕重新啟動程序。
+        </p>
+        <button class="idle-restart-btn" onclick="location.reload()">🔄 重新啟動程序</button>
+        <button class="instance-btn-takeover" style="width:100%;" onclick="closeDuplicateWindow()">❌ 關閉此視窗</button>
     </div>
 </div>
 
@@ -1181,8 +1279,110 @@
                 await new Promise((r) => { releaseWebLockResolver = r; });
             });
         }
+        isIdleClosed = false;
+        startIdleMonitor();
         updateTokenBtnStyle();
         await loadReagentsFromCloud();
+    }
+
+    // ==========================================
+    // ⏱️ 閒置 5 分鐘自動關閉機制 (Idle Auto-Close Guard)
+    // ==========================================
+    const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 分鐘 (300,000 毫秒)
+    const IDLE_WARNING_MS = 30 * 1000;     // 最後 30 秒顯示倒數提醒
+    let lastActivityTimestamp = Date.now();
+    let idleCheckTimer = null;
+    let isIdleClosed = false;
+
+    function resetIdleTimer() {
+        if (isIdleClosed || isDuplicateBlocked) return;
+        lastActivityTimestamp = Date.now();
+        const toast = document.getElementById('idleWarningToast');
+        if (toast && toast.style.display !== 'none') {
+            toast.style.display = 'none';
+        }
+    }
+
+    function releaseCurrentInstanceResources() {
+        if (heartbeatTimer) {
+            clearInterval(heartbeatTimer);
+            heartbeatTimer = null;
+        }
+        if (releaseWebLockResolver) {
+            releaseWebLockResolver();
+            releaseWebLockResolver = null;
+        }
+        try {
+            const raw = localStorage.getItem(INSTANCE_STORAGE_KEY);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed.id === CURRENT_INSTANCE_ID) {
+                    localStorage.removeItem(INSTANCE_STORAGE_KEY);
+                }
+            }
+        } catch (e) {}
+    }
+
+    function executeIdleAutoClose() {
+        if (isIdleClosed || isDuplicateBlocked) return;
+        isIdleClosed = true;
+
+        if (idleCheckTimer) {
+            clearInterval(idleCheckTimer);
+            idleCheckTimer = null;
+        }
+
+        const toast = document.getElementById('idleWarningToast');
+        if (toast) toast.style.display = 'none';
+
+        // 自動登出管理員狀態並關閉所有彈窗
+        isAdmin = false;
+        sessionAdminHash = "";
+        closeModals();
+
+        // 釋放單一視窗鎖定，避免分頁未關閉時阻擋後續開啟
+        releaseCurrentInstanceResources();
+
+        // 隱藏主畫面並顯示已關閉狀態
+        const mainWrapper = document.querySelector('.main-wrapper');
+        if (mainWrapper) mainWrapper.style.display = 'none';
+        const idleModal = document.getElementById('idleClosedModal');
+        if (idleModal) idleModal.style.display = 'flex';
+        document.title = "💤 閒置已自動關閉 - 大實驗組試劑效期標籤小工具";
+
+        // 嘗試直接關閉視窗 (PWA 獨立視窗或腳本開啟之視窗可直接關閉)
+        try {
+            window.opener = null;
+            window.open('', '_self');
+            window.close();
+        } catch (e) {}
+    }
+
+    function startIdleMonitor() {
+        lastActivityTimestamp = Date.now();
+        const activityEvents = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click', 'input', 'change'];
+        activityEvents.forEach(evt => {
+            window.addEventListener(evt, resetIdleTimer, { passive: true });
+        });
+
+        if (idleCheckTimer) clearInterval(idleCheckTimer);
+        idleCheckTimer = setInterval(() => {
+            if (isIdleClosed || isDuplicateBlocked) return;
+            const elapsed = Date.now() - lastActivityTimestamp;
+            const remaining = IDLE_TIMEOUT_MS - elapsed;
+
+            if (remaining <= 0) {
+                executeIdleAutoClose();
+            } else if (remaining <= IDLE_WARNING_MS) {
+                const secLeft = Math.ceil(remaining / 1000);
+                const toast = document.getElementById('idleWarningToast');
+                const secSpan = document.getElementById('idleCountdownSec');
+                if (secSpan) secSpan.textContent = String(secLeft);
+                if (toast && toast.style.display !== 'flex') {
+                    toast.style.display = 'flex';
+                }
+            }
+        }, 1000);
     }
 
     window.addEventListener('DOMContentLoaded', async () => {
@@ -1191,6 +1391,7 @@
             triggerDuplicateBlock();
             return;
         }
+        startIdleMonitor();
         updateTokenBtnStyle();
         loadReagentsFromCloud();
     });
@@ -2057,7 +2258,7 @@
     }
 
     window.addEventListener('beforeunload', e => {
-        if (isDuplicateBlocked) return;
+        if (isDuplicateBlocked || isIdleClosed) return;
         e.preventDefault();
         e.returnValue = '';
     });
